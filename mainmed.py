@@ -1,386 +1,710 @@
 """
-Jindal OHC - Combined App
-Screens: OPD Registration | Medicine Tracker | MedBot
+Jindal Steel OHC - Unified App
+(OPD Registration + Medicine Expiry Tracker + MedBot Chatbot)
+
+Run: python jindal_ohc_app.py
+Requirements: pip install kivy python-docx
 """
 
 import os
 import sys
+import sqlite3
 import subprocess
 from datetime import datetime
 
-# ── Kivy Imports ──────────────────────────────────────────
 from kivy.app import App
+from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.uix.scrollview import ScrollView
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.spinner import Spinner
 from kivy.uix.button import Button
-from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
-from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.uix.popup import Popup
+from kivy.graphics import Color, Rectangle, RoundedRectangle
 from kivy.core.window import Window
-from kivy.graphics import Color, RoundedRectangle, Rectangle
+from kivy.utils import get_color_from_hex
 from kivy.clock import Clock
 from kivy.metrics import dp
-from kivy.utils import get_color_from_hex
 
-# ── ReportLab (PDF generation) ────────────────────────────
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
+# ══════════════════════════════════════════════════════════════════════════
+#  GLOBAL WINDOW SETTINGS (ek hi jagah set kiya, saari screens isko share
+#  karti hain)
+# ══════════════════════════════════════════════════════════════════════════
+Window.size = (480, 820)
+Window.clearcolor = (0.85, 0.93, 1, 1)   # Light blue background
 
-Window.size = (400, 720)
+# ── Shared Colours ───────────────────────────────────────────────────────
+BLUE   = (0.05, 0.27, 0.55, 1)
+RED    = (0.72, 0.11, 0.11, 1)
+WHITE  = (1, 1, 1, 1)
+DGRAY  = (0.3, 0.3, 0.3, 1)
+GREEN  = (0.10, 0.55, 0.25, 1)
+ORANGE = (0.85, 0.45, 0.05, 1)
+BLACK  = (0, 0, 0, 1)
 
 
-# ═══════════════════════════════════════════════════════════
-#  SCREEN 1 — OPD REGISTRATION
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+#  COMMON NAVIGATION BAR (teeno screens ke beech switch karne ke liye)
+# ══════════════════════════════════════════════════════════════════════════
+def build_nav_bar(screen):
+    """screen = Screen instance jiska 'manager' baad me set hoga"""
+    bar = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(4), padding=[dp(4), dp(4)])
+    buttons = [
+        ("OPD Form", "opd", BLUE),
+        ("Medicines", "medicine", GREEN),
+        ("MedBot", "medbot", (0.12, 0.23, 0.54, 1)),
+    ]
+    for label, name, color in buttons:
+        btn = Button(text=label, bold=True, font_size=dp(12),
+                     background_normal='', background_color=color, color=WHITE)
+        btn.bind(on_release=lambda inst, n=name: setattr(screen.manager, 'current', n))
+        bar.add_widget(btn)
+    return bar
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  SCREEN 1 : OPD REGISTRATION FORM
+# ══════════════════════════════════════════════════════════════════════════
+def field(label_text, hint="", multiline=False, height=dp(38)):
+    row = BoxLayout(orientation="horizontal", size_hint_y=None,
+                     height=height if not multiline else dp(70), spacing=dp(6))
+    lbl = Label(text=label_text, size_hint_x=0.38, color=DGRAY,
+                font_size=dp(13), halign="right", valign="middle", bold=True)
+    lbl.bind(size=lbl.setter("text_size"))
+    inp = TextInput(hint_text=hint, size_hint_x=0.62, multiline=multiline,
+                     font_size=dp(13), padding=[dp(8), dp(8)],
+                     background_color=WHITE, foreground_color=BLACK,
+                     cursor_color=BLUE,
+                     size_hint_y=None, height=height if not multiline else dp(70))
+    row.add_widget(lbl)
+    row.add_widget(inp)
+    return row, inp
+
+
+def vital_field(label_text, unit_text, hint=""):
+    row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(42), spacing=dp(6))
+    lbl = Label(text=label_text, size_hint_x=0.28, color=DGRAY,
+                font_size=dp(13), bold=True, halign="right", valign="middle")
+    lbl.bind(size=lbl.setter("text_size"))
+    inp = TextInput(hint_text=hint, size_hint_x=0.45, font_size=dp(13),
+                     padding=[dp(8), dp(8)], background_color=WHITE,
+                     foreground_color=BLACK, size_hint_y=None, height=dp(38))
+    unit = Label(text=unit_text, size_hint_x=0.27, color=RED,
+                 font_size=dp(12), halign="left", valign="middle")
+    unit.bind(size=unit.setter("text_size"))
+    row.add_widget(lbl)
+    row.add_widget(inp)
+    row.add_widget(unit)
+    return row, inp
+
+
 class OPDScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.inputs = {}
+        self._build()
 
-        main_layout = BoxLayout(orientation='vertical', padding=15, spacing=8)
+    def _build(self):
+        root = BoxLayout(orientation="vertical")
+        root.add_widget(build_nav_bar(self))
 
-        main_layout.add_widget(Label(
-            text="JINDAL STEEL, PATRATU (JH)",
-            font_size='18sp', bold=True,
-            size_hint_y=None, height=30
-        ))
-        main_layout.add_widget(Label(
-            text="OCCUPATIONAL HEALTH CENTRE - OPD CARD",
-            font_size='14sp', bold=True,
-            size_hint_y=None, height=28
-        ))
+        header = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(90), padding=dp(8))
+        with header.canvas.before:
+            Color(*BLUE)
+            self._header_rect = Rectangle(pos=header.pos, size=header.size)
+        header.bind(pos=self._upd_hr, size=self._upd_hr)
 
-        scroll_view = ScrollView()
-        form_layout = GridLayout(cols=2, spacing=8, size_hint_y=None)
-        form_layout.bind(minimum_height=form_layout.setter('height'))
+        header.add_widget(Label(text="JINDAL STEEL — OHC", color=WHITE, font_size=dp(15),
+                                 bold=True, size_hint_y=None, height=dp(26)))
+        header.add_widget(Label(text="OCCUPATIONAL HEALTH CENTRE", color=(0.9, 0.9, 0.9, 1),
+                                 font_size=dp(12), size_hint_y=None, height=dp(20)))
+        header.add_widget(Label(text="OPD REGISTRATION CARD — Patratu (JH)",
+                                 color=(0.75, 0.85, 1, 1), font_size=dp(11),
+                                 size_hint_y=None, height=dp(18)))
+        root.add_widget(header)
 
-        self.fields = {
-            "Medical Officer (Dr.)": TextInput(multiline=False),
-            "Regd. No.":             TextInput(multiline=False),
-            "Service":               TextInput(multiline=False),
-            "Name of Patient":       TextInput(multiline=False),
-            "Age / Sex":             TextInput(multiline=False),
-            "E Code/ GP No.":        TextInput(multiline=False),
-            "Mob No.":               TextInput(multiline=False),
-            "Address / Deptt.":      TextInput(multiline=False),
-            "Contractor":            TextInput(multiline=False),
-            "Temp (°F)":             TextInput(multiline=False),
-            "SPO2 (%)":              TextInput(multiline=False),
-            "PR (/min.)":            TextInput(multiline=False),
-            "BP (mmHg)":             TextInput(multiline=False),
-            "Wt. (Kg)":              TextInput(multiline=False),
-            "Investigation / Remarks": TextInput(multiline=True, size_hint_y=None, height=90)
-        }
+        scroll = ScrollView(size_hint=(1, 1))
+        form = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6),
+                          padding=[dp(12), dp(10), dp(12), dp(10)])
+        form.bind(minimum_height=form.setter("height"))
 
-        for label_text, inp in self.fields.items():
-            form_layout.add_widget(Label(
-                text=label_text,
-                size_hint_y=None, height=40,
-                halign='left', text_size=(170, None)
-            ))
-            form_layout.add_widget(inp)
-            if label_text != "Investigation / Remarks":
-                inp.size_hint_y = None
-                inp.height = 40
+        def section(title):
+            lbl = Label(text=f"  {title}", size_hint_y=None, height=dp(28), color=WHITE,
+                        font_size=dp(12), bold=True, halign="left", valign="middle")
+            lbl.bind(size=lbl.setter("text_size"))
+            with lbl.canvas.before:
+                Color(*RED)
+                rect = Rectangle()
+                lbl.bind(pos=lambda w, v: setattr(rect, "pos", v),
+                         size=lambda w, v: setattr(rect, "size", v))
+            return lbl
 
-        scroll_view.add_widget(form_layout)
-        main_layout.add_widget(scroll_view)
+        form.add_widget(section("ADMINISTRATIVE DETAILS"))
+        for lname, hint, key in [
+            ("Regd. No.", "e.g. OHC-2025-001", "regd_no"),
+            ("Medical Officer", "Dr. Name", "doctor"),
+            ("Date & Time", datetime.now().strftime("%d/%m/%Y  %H:%M"), "datetime"),
+        ]:
+            r, inp = field(lname, hint)
+            if key == "datetime":
+                inp.text = datetime.now().strftime("%d/%m/%Y  %H:%M")
+            self.inputs[key] = inp
+            form.add_widget(r)
 
-        btn = Button(
-            text="Generate PDF & Print",
-            size_hint_y=None, height=50,
-            background_color=(0.1, 0.6, 0.4, 1)
-        )
-        btn.bind(on_press=self.generate_and_print)
-        main_layout.add_widget(btn)
+        form.add_widget(section("PATIENT INFORMATION"))
+        for lname, hint, key in [
+            ("Name of Patient", "Full name", "name"),
+            ("E Code / GP No.", "Employee / Guest ID", "ecode"),
+            ("Age / Sex", "e.g.  32 / M", "age_sex"),
+            ("Mob. No.", "10-digit mobile", "mobile"),
+            ("Address / Deptt.", "Department / Address", "address"),
+            ("Contractor", "Contractor name", "contractor"),
+            ("Service", "e.g.  Employee / GC", "service"),
+        ]:
+            r, inp = field(lname, hint)
+            self.inputs[key] = inp
+            form.add_widget(r)
 
-        self.add_widget(main_layout)
+        form.add_widget(section("VITAL SIGNS"))
+        for lname, unit, key in [
+            ("Temp.", "°F", "temp"),
+            ("SPO2", "%", "spo2"),
+            ("PR", "/min", "pr"),
+            ("BP", "mmHg", "bp"),
+            ("Wt.", "Kg", "weight"),
+        ]:
+            r, inp = vital_field(lname, unit)
+            self.inputs[key] = inp
+            form.add_widget(r)
 
-    def generate_and_print(self, instance):
-        pdf_filename = "OPD_Registration_Form.pdf"
-        doc = SimpleDocTemplate(pdf_filename, pagesize=letter,
-                                rightMargin=40, leftMargin=40,
-                                topMargin=40, bottomMargin=40)
-        styles = getSampleStyleSheet()
-        story  = []
+        form.add_widget(section("INVESTIGATION / NOTES"))
+        r, inp = field("Investigation", "Lab tests, X-Ray…", multiline=True)
+        self.inputs["investigation"] = inp
+        form.add_widget(r)
 
-        title_style    = ParagraphStyle('T', parent=styles['Heading1'], alignment=1, spaceAfter=5)
-        subtitle_style = ParagraphStyle('S', parent=styles['Heading2'], alignment=1, spaceAfter=20)
-        body_style     = styles['Normal']
+        r, inp = field("Remarks", "Doctor's remarks…", multiline=True)
+        self.inputs["remarks"] = inp
+        form.add_widget(r)
 
-        story.append(Paragraph("<b>JINDAL STEEL, PATRATU (JH)</b>", title_style))
-        story.append(Paragraph("OCCUPATIONAL HEALTH CENTRE - OPD CARD", subtitle_style))
-        story.append(Spacer(1, 15))
+        scroll.add_widget(form)
+        root.add_widget(scroll)
 
-        f = self.fields
-        data = [
-            [Paragraph(f"<b>Medical Officer:</b> {f['Medical Officer (Dr.)'].text}", body_style), ""],
-            [Paragraph(f"<b>Regd. No.:</b> {f['Regd. No.'].text}", body_style),
-             Paragraph(f"<b>Service:</b> {f['Service'].text}", body_style)],
-            [Paragraph(f"<b>Name of Patient:</b> {f['Name of Patient'].text}", body_style),
-             Paragraph(f"<b>Age / Sex:</b> {f['Age / Sex'].text}", body_style)],
-            [Paragraph(f"<b>E Code/ GP No.:</b> {f['E Code/ GP No.'].text}", body_style),
-             Paragraph(f"<b>Mob No.:</b> {f['Mob No.'].text}", body_style)],
-            [Paragraph(f"<b>Address/Deptt.:</b> {f['Address / Deptt.'].text}", body_style),
-             Paragraph(f"<b>Contractor:</b> {f['Contractor'].text}", body_style)],
-            [Spacer(1, 10), Spacer(1, 10)],
-            [Paragraph(f"<b>Temp (°F):</b> {f['Temp (°F)'].text}", body_style),
-             Paragraph(f"<b>SPO2 (%):</b> {f['SPO2 (%)'].text}", body_style)],
-            [Paragraph(f"<b>PR (/min.):</b> {f['PR (/min.)'].text}", body_style),
-             Paragraph(f"<b>BP (mmHg):</b> {f['BP (mmHg)'].text}", body_style)],
-            [Paragraph(f"<b>Wt. (Kg):</b> {f['Wt. (Kg)'].text}", body_style), ""],
-            [Spacer(1, 15), Spacer(1, 15)],
-            [Paragraph(f"<b>Investigation / Clinical Notes:</b><br/>{f['Investigation / Remarks'].text}", body_style), ""]
+        btn_bar = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(10), padding=[dp(10), dp(8)])
+        btn_word = Button(text="Save as Word", background_color=BLUE, color=WHITE,
+                           font_size=dp(13), bold=True)
+        btn_print = Button(text="Print / Preview", background_color=GREEN, color=WHITE,
+                            font_size=dp(13), bold=True)
+        btn_clear = Button(text="Clear", background_color=ORANGE, color=WHITE,
+                            font_size=dp(13), bold=True, size_hint_x=0.45)
+        btn_word.bind(on_press=self.save_word)
+        btn_print.bind(on_press=self.print_form)
+        btn_clear.bind(on_press=self.clear_form)
+        btn_bar.add_widget(btn_word)
+        btn_bar.add_widget(btn_print)
+        btn_bar.add_widget(btn_clear)
+        root.add_widget(btn_bar)
+
+        self.add_widget(root)
+
+    def _upd_hr(self, inst, val):
+        self._header_rect.pos = inst.pos
+        self._header_rect.size = inst.size
+
+    def _data(self):
+        return {k: v.text.strip() for k, v in self.inputs.items()}
+
+    def clear_form(self, *_):
+        for k, v in self.inputs.items():
+            v.text = ""
+        self.inputs["datetime"].text = datetime.now().strftime("%d/%m/%Y  %H:%M")
+        self._popup("Form Cleared", "All fields have been reset.")
+
+    def save_word(self, *_):
+        try:
+            from docx import Document
+            from docx.shared import Pt, RGBColor, Cm
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+        except ImportError:
+            self._popup("Missing Library",
+                         "python-docx not installed.\n\nRun:\n  pip install python-docx", error=True)
+            return
+
+        d = self._data()
+        doc = Document()
+        for sec in doc.sections:
+            sec.top_margin = Cm(1.5)
+            sec.bottom_margin = Cm(1.5)
+            sec.left_margin = Cm(2)
+            sec.right_margin = Cm(2)
+
+        def heading(text, level=1):
+            p = doc.add_heading(text, level=level)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in p.runs:
+                run.font.color.rgb = RGBColor(13, 71, 141)
+            return p
+
+        def kv(label, value, bold_val=False):
+            p = doc.add_paragraph()
+            r1 = p.add_run(f"{label}: ")
+            r1.bold = True
+            r1.font.size = Pt(11)
+            r2 = p.add_run(value or "—")
+            r2.bold = bold_val
+            r2.font.size = Pt(11)
+            p.paragraph_format.space_after = Pt(2)
+
+        heading("JINDAL STEEL POWER LIMITED", level=1)
+        heading("Occupational Health Centre — Patratu (JH)", level=2)
+        heading("OPD REGISTRATION CARD", level=2)
+        doc.add_paragraph()
+
+        doc.add_heading("Administrative Details", level=3)
+        kv("Regd. No.", d.get("regd_no"))
+        kv("Medical Officer", d.get("doctor"))
+        kv("Date & Time", d.get("datetime"))
+
+        doc.add_paragraph()
+        doc.add_heading("Patient Information", level=3)
+        kv("Name of Patient", d.get("name"), bold_val=True)
+        kv("E Code / GP No.", d.get("ecode"))
+        kv("Age / Sex", d.get("age_sex"))
+        kv("Mobile No.", d.get("mobile"))
+        kv("Address / Deptt.", d.get("address"))
+        kv("Contractor", d.get("contractor"))
+        kv("Service", d.get("service"))
+
+        doc.add_paragraph()
+        doc.add_heading("Vital Signs", level=3)
+        tbl = doc.add_table(rows=1, cols=2)
+        tbl.style = "Table Grid"
+        hdr = tbl.rows[0].cells
+        hdr[0].text = "Parameter"
+        hdr[1].text = "Value"
+        for cell in hdr:
+            for para in cell.paragraphs:
+                for run in para.runs:
+                    run.bold = True
+
+        vitals = [
+            ("Temperature", f"{d.get('temp', '')}  °F"),
+            ("SPO2", f"{d.get('spo2', '')}  %"),
+            ("Pulse Rate", f"{d.get('pr', '')}  /min"),
+            ("Blood Pressure", f"{d.get('bp', '')}  mmHg"),
+            ("Weight", f"{d.get('weight', '')}  Kg"),
         ]
+        for name, val in vitals:
+            row = tbl.add_row().cells
+            row[0].text = name
+            row[1].text = val
 
-        table = Table(data, colWidths=[240, 240])
-        table.setStyle(TableStyle([
-            ('SPAN', (0, 0), (1, 0)),
-            ('SPAN', (0, 10), (1, 10)),
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ]))
-        story.append(table)
-        story.append(Spacer(1, 60))
-        story.append(Paragraph(
-            "<b>Signature of Doctor:</b> _______________________",
-            ParagraphStyle('RA', parent=styles['Normal'], alignment=2)
-        ))
-        doc.build(story)
-        print(f"PDF saved: {pdf_filename}")
+        doc.add_paragraph()
+        doc.add_heading("Investigation / Notes", level=3)
+        doc.add_paragraph(d.get("investigation") or "—")
+        doc.add_heading("Remarks", level=3)
+        doc.add_paragraph(d.get("remarks") or "—")
+
+        section_obj = doc.sections[0]
+        section_obj.footer_distance = Cm(1)
+        footer = section_obj.footer
+        footer.is_linked_to_previous = False
+        for para in list(footer.paragraphs):
+            elem = para._element
+            parent = elem.getparent()
+            if parent is not None:
+                parent.remove(elem)
+        sig_para = footer.add_paragraph()
+        sig_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        sig_run = sig_para.add_run("Signature of Doctor: ____________________")
+        sig_run.bold = True
+        sig_run.font.size = Pt(11)
+        sig_run.font.color.rgb = RGBColor(20, 20, 20)
+
+        patient_name = (d.get("name") or "Patient").strip().replace(" ", "_") or "Form"
+        fname = f"OPD_{patient_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
+
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        if os.path.isdir(desktop):
+            save_path = os.path.join(desktop, fname)
+            location_label = "Desktop"
+        else:
+            save_path = os.path.join(os.getcwd(), fname)
+            location_label = os.getcwd()
 
         try:
-            if sys.platform == "win32":
-                os.startfile(pdf_filename, "print")
-            elif sys.platform == "darwin":
-                subprocess.run(["lp", pdf_filename], check=True)
+            doc.save(save_path)
+            if os.path.isfile(save_path):
+                size_kb = round(os.path.getsize(save_path) / 1024, 1)
+                self._try_open(save_path)
+                self._popup_save_success(fname, save_path, location_label, size_kb)
             else:
-                subprocess.run(["lpr", pdf_filename], check=True)
+                self._popup("Save Failed", "File was not created on disk.\nCheck folder permissions.", error=True)
+        except Exception:
+            fallback_path = os.path.join(os.getcwd(), fname)
+            try:
+                doc.save(fallback_path)
+                if os.path.isfile(fallback_path):
+                    size_kb = round(os.path.getsize(fallback_path) / 1024, 1)
+                    self._try_open(fallback_path)
+                    self._popup_save_success(fname, fallback_path, os.getcwd(), size_kb)
+            except Exception as e2:
+                self._popup("Save Failed", f"Could not save file.\n\nError:\n{str(e2)}", error=True)
+
+    def _try_open(self, path):
+        try:
+            if sys.platform == "win32":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception:
+            pass
+
+    def print_form(self, *_):
+        d = self._data()
+
+        def row(label, value):
+            return f"<tr><td class='lbl'>{label}</td><td class='val'>{value or '&nbsp;'}</td></tr>"
+
+        html = f"""<!DOCTYPE html>
+<html><head><meta charset='UTF-8'><title>OPD Card — {d.get('name', 'Patient')}</title>
+<style>
+body {{ font-family: Arial, sans-serif; margin: 20px; color: #111; }}
+h1 {{ text-align:center; color:#0d478d; margin-bottom:2px; font-size:18px; }}
+h2 {{ text-align:center; color:#333; margin-top:2px; font-size:13px; }}
+h3 {{ color:#b71c1c; border-bottom:1px solid #b71c1c; padding-bottom:3px; margin-top:14px; font-size:13px; }}
+table {{ width:100%; border-collapse:collapse; margin-bottom:8px; }}
+.lbl {{ font-weight:bold; width:40%; padding:5px 8px; background:#f0f4ff; border:1px solid #ccc; font-size:12px; }}
+.val {{ padding:5px 8px; border:1px solid #ccc; font-size:12px; }}
+.sig {{ position: fixed; bottom: 18px; right: 24px; font-weight: bold; font-size: 12px; color: #111; }}
+@media print {{ body {{ margin: 10mm 12mm; }} .sig {{ position: fixed; bottom: 12mm; right: 12mm; font-size: 11pt; }} }}
+</style></head><body>
+<h1>JINDAL STEEL POWER LIMITED</h1>
+<h2>Occupational Health Centre — Patratu (JH) &nbsp;|&nbsp; OPD CARD</h2>
+<h3>Administrative Details</h3>
+<table>{row("Regd. No.", d.get("regd_no"))}{row("Medical Officer", d.get("doctor"))}{row("Date &amp; Time", d.get("datetime"))}</table>
+<h3>Patient Information</h3>
+<table>{row("Name of Patient", d.get("name"))}{row("E Code / GP No.", d.get("ecode"))}{row("Age / Sex", d.get("age_sex"))}{row("Mobile No.", d.get("mobile"))}{row("Address / Deptt.", d.get("address"))}{row("Contractor", d.get("contractor"))}{row("Service", d.get("service"))}</table>
+<h3>Vital Signs</h3>
+<table>{row("Temperature", (d.get("temp") or "") + " °F")}{row("SPO2", (d.get("spo2") or "") + " %")}{row("Pulse Rate", (d.get("pr") or "") + " /min")}{row("Blood Pressure", (d.get("bp") or "") + " mmHg")}{row("Weight", (d.get("weight") or "") + " Kg")}</table>
+<h3>Investigation / Notes</h3><p style='font-size:12px'>{d.get("investigation") or "—"}</p>
+<h3>Remarks</h3><p style='font-size:12px'>{d.get("remarks") or "—"}</p>
+<div class='sig'>Signature of Doctor: _________________________</div>
+</body></html>"""
+
+        html_path = os.path.join(os.getcwd(), "opd_preview.html")
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html)
+        try:
+            self._try_open(html_path)
+            self._popup("Print Preview", "OPD Card opened in your browser.\n\nPress  Ctrl+P  to print\nor save as PDF.")
         except Exception as e:
-            print(f"Print error: {e}")
+            self._popup("Error", str(e), error=True)
+
+    def _popup_save_success(self, fname, full_path, location_label, size_kb):
+        content = BoxLayout(orientation="vertical", padding=dp(14), spacing=dp(8))
+        content.add_widget(Label(text=f"[b]{fname}[/b]", markup=True, color=(0.05, 0.4, 0.1, 1),
+                                  font_size=dp(13), halign="center", valign="middle",
+                                  size_hint_y=None, height=dp(30), text_size=(dp(290), None)))
+        content.add_widget(Label(text=f"[b]Location:[/b]  {location_label}", markup=True,
+                                  color=(0.2, 0.2, 0.2, 1), font_size=dp(12), halign="left",
+                                  valign="middle", size_hint_y=None, height=dp(24), text_size=(dp(290), None)))
+        path_lbl = Label(text=full_path, color=(0.4, 0.4, 0.4, 1), font_size=dp(11),
+                          halign="left", valign="top", size_hint_y=None, text_size=(dp(290), None))
+        path_lbl.bind(texture_size=lambda w, v: setattr(w, "height", v[1] + dp(6)))
+        content.add_widget(path_lbl)
+        content.add_widget(Label(text=f"File saved successfully  •  {size_kb} KB",
+                                  color=(0.05, 0.45, 0.15, 1), font_size=dp(12), halign="center",
+                                  valign="middle", size_hint_y=None, height=dp(24), text_size=(dp(290), None)))
+        content.add_widget(Label(text="(File opened automatically)", color=(0.5, 0.5, 0.5, 1),
+                                  font_size=dp(11), halign="center", valign="middle",
+                                  size_hint_y=None, height=dp(20), text_size=(dp(290), None)))
+        btn = Button(text="OK", size_hint_y=None, height=dp(42), background_color=GREEN,
+                     color=WHITE, font_size=dp(13), bold=True)
+        content.add_widget(btn)
+        pop = Popup(title="Word File Saved", content=content, size_hint=(0.88, 0.58),
+                    title_color=GREEN, separator_color=GREEN)
+        btn.bind(on_press=pop.dismiss)
+        pop.open()
+
+    def _popup(self, title, msg, error=False):
+        color = RED if error else GREEN
+        content = BoxLayout(orientation="vertical", padding=dp(14), spacing=dp(10))
+        content.add_widget(Label(text=msg, color=(0.1, 0.1, 0.1, 1), font_size=dp(13),
+                                  halign="center", valign="middle", text_size=(dp(280), None)))
+        btn = Button(text="OK", size_hint_y=None, height=dp(42), background_color=color,
+                     color=WHITE, font_size=dp(13), bold=True)
+        content.add_widget(btn)
+        pop = Popup(title=title, content=content, size_hint=(0.82, 0.42),
+                    title_color=color, separator_color=color)
+        btn.bind(on_press=pop.dismiss)
+        pop.open()
 
 
-# ═══════════════════════════════════════════════════════════
-#  SCREEN 2 — MEDICINE EXPIRY TRACKER
-# ═══════════════════════════════════════════════════════════
-class MedicineScreen(Screen):
+# ══════════════════════════════════════════════════════════════════════════
+#  SCREEN 2 : MEDICINE EXPIRY TRACKER
+# ══════════════════════════════════════════════════════════════════════════
+DB_NAME = "medicines.db"
+
+def get_db_path():
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, DB_NAME)
+
+def init_db():
+    conn = sqlite3.connect(get_db_path())
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS medicines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            unit TEXT NOT NULL,
+            qty INTEGER NOT NULL,
+            expiry TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def db_add_medicine(name, unit, qty, expiry_str):
+    conn = sqlite3.connect(get_db_path())
+    cur = conn.cursor()
+    cur.execute("INSERT INTO medicines (name, unit, qty, expiry) VALUES (?, ?, ?, ?)",
+                (name, unit, qty, expiry_str))
+    conn.commit()
+    conn.close()
+
+def db_fetch_all():
+    conn = sqlite3.connect(get_db_path())
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, unit, qty, expiry FROM medicines ORDER BY expiry ASC")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+def db_delete_medicine(med_id):
+    conn = sqlite3.connect(get_db_path())
+    cur = conn.cursor()
+    cur.execute("DELETE FROM medicines WHERE id = ?", (med_id,))
+    conn.commit()
+    conn.close()
+
+LOW_STOCK_THRESHOLD = {"Strips": 10, "Tabs": 15}
+EXPIRY_WARNING_DAYS = 15
+
+
+class MedicineTrackerBody(BoxLayout):
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        super(MedicineTrackerBody, self).__init__(**kwargs)
+        self.orientation = 'vertical'
+        self.padding = 10
+        self.spacing = 10
+
+        init_db()
         self.medicines = []
 
-        main_layout = BoxLayout(orientation='vertical', padding=10, spacing=8)
-        main_layout.add_widget(Label(
-            text="Medicine Expiry Tracker",
-            font_size=22, bold=True,
-            size_hint_y=None, height=40
-        ))
+        self.add_widget(Label(text="Medicine Expiry Tracker", font_size=24,
+                               size_hint_y=None, height=40, color=BLACK))
 
-        form = GridLayout(cols=2, spacing=8, size_hint_y=None, height=200)
-
-        form.add_widget(Label(text="Medicine Name:"))
+        form = GridLayout(cols=2, spacing=10, size_hint_y=None, height=180)
+        form.add_widget(Label(text="Medicine Name:", color=BLACK))
         self.name_input = TextInput(multiline=False)
         form.add_widget(self.name_input)
 
-        form.add_widget(Label(text="Unit Type:"))
-        self.unit_spinner = Spinner(text='Strips', values=('Strips', 'Tabs', 'Bottles', 'Vials'))
+        form.add_widget(Label(text="Unit Type:", color=BLACK))
+        self.unit_spinner = Spinner(text='Strips', values=('Strips', 'Tabs'))
         form.add_widget(self.unit_spinner)
 
-        form.add_widget(Label(text="Quantity:"))
+        form.add_widget(Label(text="Quantity:", color=BLACK))
         self.qty_input = TextInput(multiline=False, input_filter='int')
         form.add_widget(self.qty_input)
 
-        form.add_widget(Label(text="Expiry (YYYY-MM-DD):"))
-        self.expiry_input = TextInput(multiline=False, hint_text="e.g., 2026-12-31")
+        form.add_widget(Label(text="Expiry Date (DD-MM-YYYY):", color=BLACK))
+        self.expiry_input = TextInput(multiline=False, hint_text="e.g., 31-12-2026")
         form.add_widget(self.expiry_input)
 
-        main_layout.add_widget(form)
+        self.add_widget(form)
 
-        add_btn = Button(
-            text="+ Add Medicine",
-            size_hint_y=None, height=44,
-            background_color=(0.2, 0.6, 1, 1)
-        )
+        add_btn = Button(text="Add Medicine", size_hint_y=None, height=44,
+                          background_color=(0.2, 0.6, 1, 1))
         add_btn.bind(on_press=self.add_medicine)
-        main_layout.add_widget(add_btn)
+        self.add_widget(add_btn)
 
-        self.alert_label = Label(
-            text="Status: All clear ✅",
-            size_hint_y=None, height=30,
-            color=(0, 1, 0, 1)
-        )
-        main_layout.add_widget(self.alert_label)
+        self.alert_label = Label(text="Status: All clear", size_hint_y=None, height=60, color=(0, 0.6, 0, 1))
+        self.alert_label.bind(size=self.alert_label.setter('text_size'))
+        self.add_widget(self.alert_label)
 
-        scroll = ScrollView()
+        self.scroll_view = ScrollView()
         self.med_list_layout = GridLayout(cols=1, spacing=5, size_hint_y=None)
         self.med_list_layout.bind(minimum_height=self.med_list_layout.setter('height'))
-        scroll.add_widget(self.med_list_layout)
-        main_layout.add_widget(scroll)
+        self.scroll_view.add_widget(self.med_list_layout)
+        self.add_widget(self.scroll_view)
 
-        self.add_widget(main_layout)
+        self.load_from_db()
+
+    def load_from_db(self):
+        rows = db_fetch_all()
+        self.medicines = []
+        for row in rows:
+            med_id, name, unit, qty, expiry_str = row
+            expiry_date = datetime.strptime(expiry_str, "%d-%m-%Y").date()
+            self.medicines.append({"id": med_id, "name": name, "unit": unit,
+                                    "qty": int(qty), "expiry": expiry_date})
+        self.refresh_list()
 
     def add_medicine(self, instance):
-        name       = self.name_input.text.strip()
-        unit       = self.unit_spinner.text
-        qty        = self.qty_input.text.strip()
+        name = self.name_input.text.strip()
+        unit = self.unit_spinner.text
+        qty = self.qty_input.text.strip()
         expiry_str = self.expiry_input.text.strip()
 
         if not name or not qty or not expiry_str:
-            self._alert("Error: All fields required!", error=True)
+            self.update_alert("Error: All fields are required!", is_error=True)
             return
         try:
-            expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            datetime.strptime(expiry_str, "%d-%m-%Y").date()
         except ValueError:
-            self._alert("Error: Use YYYY-MM-DD format!", error=True)
+            self.update_alert("Error: Use DD-MM-YYYY format!", is_error=True)
             return
 
-        self.medicines.append({"name": name, "unit": unit, "qty": qty, "expiry": expiry_date})
-        self.name_input.text = self.qty_input.text = self.expiry_input.text = ""
-        self.refresh_list()
+        db_add_medicine(name, unit, int(qty), expiry_str)
+        self.name_input.text = ""
+        self.qty_input.text = ""
+        self.expiry_input.text = ""
+        self.load_from_db()
 
     def refresh_list(self):
         self.med_list_layout.clear_widgets()
-        today      = datetime.now().date()
-        has_expiry = False
+        today = datetime.now().date()
+        expired_names, expiring_soon_names, low_stock_names = [], [], []
 
-        for i, med in enumerate(self.medicines):
-            days = (med["expiry"] - today).days
-            if days <= 0:
-                status, col = "[EXPIRED ❌]", (1, 0.3, 0.3, 1)
-                has_expiry = True
-            elif days <= 30:
-                status, col = f"[{days} days left ⚠️]", (1, 0.65, 0, 1)
+        for med in self.medicines:
+            days_left = (med["expiry"] - today).days
+            threshold = LOW_STOCK_THRESHOLD.get(med["unit"], 10)
+            is_low_stock = med["qty"] < threshold
+
+            if days_left <= 0:
+                status_text = "[EXPIRED]"
+                item_color = (1, 0.3, 0.3, 1)
+                expired_names.append(med["name"])
+            elif days_left <= EXPIRY_WARNING_DAYS:
+                status_text = f"[Expires in {days_left} days]"
+                item_color = (1, 0.5, 0, 1)
+                expiring_soon_names.append(f"{med['name']} ({days_left}d)")
             else:
-                status, col = f"[{days} days left ✅]", (1, 1, 1, 1)
+                status_text = f"[{days_left} days left]"
+                item_color = BLACK
 
-            row = BoxLayout(orientation='horizontal', size_hint_y=None, height=42, spacing=8)
-            info = f"{med['name']} — {med['qty']} {med['unit']}  |  Exp: {med['expiry']}  {status}"
-            lbl  = Label(text=info, color=col, halign='left', valign='middle')
+            stock_text = ""
+            if is_low_stock:
+                stock_text = " | LOW STOCK!"
+                low_stock_names.append(f"{med['name']} ({med['qty']} {med['unit']})")
+                item_color = (0.7, 0, 0.7, 1)
+
+            row = BoxLayout(orientation='horizontal', size_hint_y=None, height=40, spacing=10)
+            exp_display = med['expiry'].strftime("%d-%m-%Y")
+            info_text = f"{med['name']} - {med['qty']} {med['unit']} | Exp: {exp_display} {status_text}{stock_text}"
+            lbl = Label(text=info_text, color=item_color, halign='left', valign='middle', font_size=16)
             lbl.bind(size=lbl.setter('text_size'))
             row.add_widget(lbl)
 
-            del_btn = Button(
-                text="Del", size_hint_x=None, width=60,
-                background_color=(0.8, 0.2, 0.2, 1)
-            )
-            del_btn.bind(on_press=lambda inst, idx=i: self.delete_medicine(idx))
+            del_btn = Button(text="Delete", size_hint_x=None, width=80, background_color=(0.8, 0.2, 0.2, 1))
+            del_btn.bind(on_press=lambda inst, med_id=med["id"]: self.delete_medicine(med_id))
             row.add_widget(del_btn)
             self.med_list_layout.add_widget(row)
 
-        if has_expiry:
-            self._alert("⚠️ ALERT: Expired medicine in list!", error=True)
+        self.build_alert_message(expired_names, expiring_soon_names, low_stock_names)
+
+    def build_alert_message(self, expired_names, expiring_soon_names, low_stock_names):
+        messages = []
+        if expired_names:
+            messages.append(f"EXPIRED: {', '.join(expired_names)}")
+        if expiring_soon_names:
+            messages.append(f"Expiring within {EXPIRY_WARNING_DAYS} days: {', '.join(expiring_soon_names)}")
+        if low_stock_names:
+            messages.append(f"Low Stock: {', '.join(low_stock_names)}")
+
+        if messages:
+            self.update_alert(" || ".join(messages), is_error=True)
         else:
-            self._alert("Status: All clear ✅", error=False)
+            self.update_alert("Status: System OK. No expired/low-stock medicines.", is_error=False)
 
-    def delete_medicine(self, index):
-        if 0 <= index < len(self.medicines):
-            del self.medicines[index]
-            self.refresh_list()
+    def delete_medicine(self, med_id):
+        db_delete_medicine(med_id)
+        self.load_from_db()
 
-    def _alert(self, text, error=False):
-        self.alert_label.text  = text
-        self.alert_label.color = (1, 0.2, 0.2, 1) if error else (0.2, 1, 0.2, 1)
+    def update_alert(self, text, is_error=False):
+        self.alert_label.text = text
+        self.alert_label.color = (0.8, 0, 0, 1) if is_error else (0, 0.6, 0, 1)
+
+    def on_start_check(self):
+        today = datetime.now().date()
+        urgent = []
+        for med in self.medicines:
+            days_left = (med["expiry"] - today).days
+            threshold = LOW_STOCK_THRESHOLD.get(med["unit"], 10)
+            if days_left <= 0:
+                urgent.append(f"{med['name']} - EXPIRED")
+            elif days_left <= EXPIRY_WARNING_DAYS:
+                urgent.append(f"{med['name']} - expires in {days_left} days")
+            if med["qty"] < threshold:
+                urgent.append(f"{med['name']} - LOW STOCK ({med['qty']} {med['unit']})")
+
+        if urgent:
+            content = BoxLayout(orientation="vertical", padding=dp(14), spacing=dp(10))
+            with content.canvas.before:
+                Color(0.85, 0.93, 1, 1)
+                content._bg_rect = Rectangle(pos=content.pos, size=content.size)
+            content.bind(pos=lambda w, v: setattr(w._bg_rect, "pos", v),
+                         size=lambda w, v: setattr(w._bg_rect, "size", v))
+
+            msg_lbl = Label(text="\n".join(urgent), color=BLACK, font_size=dp(13),
+                             halign="left", valign="top", text_size=(dp(280), None))
+            content.add_widget(msg_lbl)
+            close_btn = Button(text="OK", size_hint_y=None, height=dp(42),
+                                background_color=(0.2, 0.6, 1, 1), color=WHITE,
+                                font_size=dp(13), bold=True)
+            content.add_widget(close_btn)
+
+            popup = Popup(title="Medicine Alerts", content=content, size_hint=(0.85, 0.6),
+                           title_color=BLACK, separator_color=(0.2, 0.6, 1, 1))
+            close_btn.bind(on_press=popup.dismiss)
+            popup.open()
 
 
-# ═══════════════════════════════════════════════════════════
-#  SCREEN 3 — MEDBOT CHATBOT
-# ═══════════════════════════════════════════════════════════
+class MedicineScreen(Screen):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        root = BoxLayout(orientation="vertical")
+        root.add_widget(build_nav_bar(self))
+        self.body = MedicineTrackerBody()
+        root.add_widget(self.body)
+        self.add_widget(root)
 
-# ── Medicine Database ────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════════════════
+#  SCREEN 3 : MEDBOT CHATBOT
+# ══════════════════════════════════════════════════════════════════════════
 MEDICINE_DB = {
-    "fever":               ["Paracetamol", "Ibuprofen", "Aspirin", "Mefenamic Acid"],
-    "headache":            ["Paracetamol", "Ibuprofen", "Aspirin", "Diclofenac"],
-    "pain":                ["Ibuprofen", "Diclofenac", "Paracetamol", "Tramadol"],
-    "inflammation":        ["Ibuprofen", "Diclofenac", "Naproxen", "Prednisolone"],
-    "allergy":             ["Cetirizine", "Loratadine", "Fexofenadine", "Chlorpheniramine"],
-    "sneezing":            ["Cetirizine", "Loratadine", "Fexofenadine", "Levocetirizine"],
-    "acidity":             ["Pantoprazole", "Omeprazole", "Ranitidine", "Famotidine"],
-    "heartburn":           ["Pantoprazole", "Omeprazole", "Esomeprazole", "Antacid"],
-    "gastric":             ["Pantoprazole", "Omeprazole", "Domperidone", "Metoclopramide"],
-    "bacterial infection": ["Amoxicillin", "Azithromycin", "Ciprofloxacin", "Doxycycline"],
-    "infection":           ["Amoxicillin", "Azithromycin", "Ciprofloxacin", "Metronidazole"],
-    "cough":               ["Dextromethorphan", "Bromhexine", "Ambroxol", "Codeine Linctus"],
-    "cold":                ["Cetirizine", "Paracetamol", "Pseudoephedrine", "Phenylephrine"],
-    "diabetes":            ["Metformin", "Glibenclamide", "Sitagliptin", "Insulin"],
-    "blood sugar":         ["Metformin", "Glipizide", "Vildagliptin", "Empagliflozin"],
-    "high blood pressure": ["Amlodipine", "Atenolol", "Losartan", "Enalapril"],
-    "hypertension":        ["Amlodipine", "Losartan", "Metoprolol", "Ramipril"],
-    "asthma":              ["Salbutamol", "Budesonide", "Montelukast", "Theophylline"],
-    "nausea":              ["Ondansetron", "Domperidone", "Metoclopramide", "Promethazine"],
-    "vomiting":            ["Ondansetron", "Metoclopramide", "Domperidone", "Granisetron"],
-    "diarrhea":            ["ORS", "Loperamide", "Metronidazole", "Zinc Sulfate"],
-    "constipation":        ["Lactulose", "Bisacodyl", "Ispaghula Husk", "Senna"],
-    "stomach pain":        ["Antispasmodic", "Pantoprazole", "Metronidazole", "Domperidone"],
-    "body ache":           ["Paracetamol", "Ibuprofen", "Diclofenac", "Tramadol"],
-    "weakness":            ["Multivitamin", "Iron Tablet", "Vitamin B12", "Glucose"],
-    "anxiety":             ["Alprazolam", "Clonazepam", "Escitalopram", "Buspirone"],
-    "insomnia":            ["Zolpidem", "Melatonin", "Clonazepam", "Nitrazepam"],
-    "skin rash":           ["Hydrocortisone Cream", "Cetirizine", "Calamine Lotion", "Betamethasone"],
-    "itching":             ["Cetirizine", "Chlorpheniramine", "Calamine Lotion", "Hydrocortisone"],
-    "wound":               ["Povidone Iodine", "Silver Sulfadiazine", "Neosporin", "Framycetin"],
-    "eye infection":       ["Ciprofloxacin Eye Drop", "Tobramycin", "Chloramphenicol Eye Drop"],
-    "ear pain":            ["Paracetamol", "Ibuprofen", "Clotrimazole Ear Drop", "Neomycin Ear Drop"],
-    "toothache":           ["Paracetamol", "Ibuprofen", "Diclofenac", "Metronidazole"],
-    "urinary infection":   ["Nitrofurantoin", "Ciprofloxacin", "Co-trimoxazole", "Fosfomycin"],
-    "joint pain":          ["Diclofenac", "Naproxen", "Ibuprofen", "Glucosamine"],
-    "back pain":           ["Diclofenac", "Ibuprofen", "Tramadol", "Thiocolchicoside"],
-    "muscle pain":         ["Diclofenac Gel", "Ibuprofen", "Thiocolchicoside", "Mefenamic Acid"],
-    "anaemia":             ["Iron + Folic Acid", "Vitamin B12", "Ferrous Sulfate"],
-    "vitamin deficiency":  ["Multivitamin", "Vitamin D3", "Vitamin B12", "Vitamin C"],
-    "migraine":            ["Sumatriptan", "Paracetamol", "Ibuprofen", "Propranolol"],
-    "swelling":            ["Furosemide", "Spironolactone", "Hydrochlorothiazide", "Ibuprofen"],
-    "chest pain":          ["Aspirin", "Nitroglycerine", "Atenolol", "Pantoprazole"],
-    "dizziness":           ["Betahistine", "Cinnarizine", "Meclizine", "Dimenhydrinate"],
+    "fever": ["Paracetamol 650mg", "Ibuprofen 400mg", "Dolo 650mg"],
+    "headache": ["Saridon", "Paracetamol 500mg", "Aspirin"],
+    "pain": ["Tramadol", "Diclofenac Gel", "Zerodol-P"],
+    "allergy": ["Cetirizine 10mg", "Allegra 120mg", "Levocetirizine"],
+    "acidity": ["Pantocid 40mg", "Pan-D", "Omeprazole", "Digene Syrup"],
+    "cough": ["Ascoril LS", "Benadryl Cough Syrup", "Ambroxol"],
+    "cold": ["Solvin Cold", "Sinarest", "Cheston Cold"],
+    "diarrhea": ["ORS Powder", "Loperamide", "Metrogyl 400mg"],
+    "weakness": ["Zincovit", "Neurobion Forte", "Limcee Vitamin C"],
 }
 
-ALIASES = {
-    "bp": "high blood pressure", "sugar": "blood sugar",
-    "bp high": "hypertension", "loose motion": "diarrhea",
-    "loose motions": "diarrhea", "motions": "diarrhea",
-    "ulcer": "acidity", "gas": "gastric", "indigestion": "acidity",
-    "breathlessness": "asthma", "breathless": "asthma",
-    "running nose": "cold", "runny nose": "cold",
-    "body pain": "body ache", "tired": "weakness", "fatigue": "weakness",
-    "rash": "skin rash", "itch": "itching", "itchy": "itching",
-    "uti": "urinary infection", "urine infection": "urinary infection",
-    "tooth": "toothache", "teeth": "toothache",
-    "knee pain": "joint pain", "knee": "joint pain",
-    "anemia": "anaemia", "low haemoglobin": "anaemia",
-    "vitamin": "vitamin deficiency", "dizzy": "dizziness",
-    "swell": "swelling", "swollen": "swelling", "chest": "chest pain",
-}
-
-
-def find_medicines(user_input: str):
-    text = user_input.lower().strip()
-    for alias, canonical in ALIASES.items():
-        if alias in text:
-            text = text.replace(alias, canonical)
-    results = {}
-    for symptom, meds in MEDICINE_DB.items():
-        if symptom in text:
-            results[symptom.title()] = list(dict.fromkeys(meds))
-    return results if results else None
-
-
-# ── Chat Bubble Widget ───────────────────────────────────
-C_BG          = get_color_from_hex("#FFFFFF")
-C_HEADER_BG   = get_color_from_hex("#1565C0")
-C_BOT_BUBBLE  = get_color_from_hex("#E3F2FD")
-C_USER_BUBBLE = get_color_from_hex("#1565C0")
-C_BOT_TEXT    = get_color_from_hex("#0D1B2A")
-C_USER_TEXT   = get_color_from_hex("#FFFFFF")
-C_ACCENT      = get_color_from_hex("#1565C0")
-C_SEND_BTN    = get_color_from_hex("#1565C0")
-C_QUICK_BG    = get_color_from_hex("#E3F2FD")
-C_QUICK_TEXT  = get_color_from_hex("#1565C0")
-C_QUICK_BAR   = get_color_from_hex("#F5F5F5")
-C_INPUT_BG    = get_color_from_hex("#F5F5F5")
-C_INPUT_TEXT  = get_color_from_hex("#0D1B2A")
-C_DIVIDER     = get_color_from_hex("#E0E0E0")
+ALIASES = {"bp": "high blood pressure", "sugar": "blood sugar",
+           "loose motion": "diarrhea", "gas": "acidity"}
 
 
 class ChatBubble(BoxLayout):
@@ -388,40 +712,28 @@ class ChatBubble(BoxLayout):
         super().__init__(**kwargs)
         self.orientation = "horizontal"
         self.size_hint_y = None
-        self.padding = [dp(10), dp(6)]
+        self.padding = [dp(10), dp(5)]
         self.spacing = dp(8)
 
-        bubble_color = C_BOT_BUBBLE if is_bot else C_USER_BUBBLE
-        text_color   = C_BOT_TEXT   if is_bot else C_USER_TEXT
+        bubble_color = get_color_from_hex("#E3F2FD") if is_bot else get_color_from_hex("#1E3A8A")
+        text_color = get_color_from_hex("#0D1B2A") if is_bot else get_color_from_hex("#FFFFFF")
 
-        avatar = Label(
-            text="🤖" if is_bot else "👤",
-            font_size=dp(20),
-            size_hint=(None, None), size=(dp(36), dp(36))
-        )
+        avatar = Label(text="Bot" if is_bot else "You", font_size=dp(12), size_hint=(None, None), size=(dp(34), dp(28)))
 
-        msg = Label(
-            text=text, markup=True, color=text_color,
-            font_size=dp(14),
-            text_size=(Window.width * 0.65, None),
-            halign="left", valign="top",
-        )
-        msg.bind(texture_size=msg.setter("size"))
+        self.msg = Label(text=text, markup=True, color=text_color, font_size='14sp',
+                          text_size=(dp(260), None), halign="left", valign="top")
+        self.msg.bind(texture_size=self.msg.setter("size"))
 
-        bubble_wrap = BoxLayout(size_hint=(None, None), padding=[dp(10), dp(8)])
+        bubble_wrap = BoxLayout(size_hint=(None, None), padding=[dp(12), dp(10)])
         with bubble_wrap.canvas.before:
             Color(*bubble_color)
-            bubble_wrap.bg_rect = RoundedRectangle(
-                pos=bubble_wrap.pos, size=bubble_wrap.size, radius=[dp(12)]
-            )
+            bubble_wrap.bg_rect = RoundedRectangle(pos=bubble_wrap.pos, size=bubble_wrap.size, radius=[12])
         bubble_wrap.bind(
             pos=lambda *a: setattr(bubble_wrap.bg_rect, "pos", bubble_wrap.pos),
             size=lambda *a: setattr(bubble_wrap.bg_rect, "size", bubble_wrap.size),
         )
-        bubble_wrap.add_widget(msg)
-        msg.bind(size=lambda *a: setattr(
-            bubble_wrap, "size", (msg.width + dp(20), msg.height + dp(16))
-        ))
+        bubble_wrap.add_widget(self.msg)
+        self.msg.bind(size=lambda *a: setattr(bubble_wrap, "size", (self.msg.width + dp(24), self.msg.height + dp(20))))
 
         if is_bot:
             self.add_widget(avatar)
@@ -430,269 +742,125 @@ class ChatBubble(BoxLayout):
         else:
             self.add_widget(Widget())
             self.add_widget(bubble_wrap)
-            self.add_widget(avatar) 
+            self.add_widget(avatar)
 
         self.bind(minimum_height=self.setter("height"))
-        Clock.schedule_once(lambda dt: self._fix_height(), 0.06)  
+        Clock.schedule_once(lambda dt: self._fix_height(), 0.05)
 
     def _fix_height(self):
         heights = [c.height for c in self.children if c.height > 0]
-        self.height = (max(heights) if heights else dp(48)) + dp(16)
+        self.height = (max(heights) if heights else dp(40)) + dp(12)
+
+
+class MedBotBody(BoxLayout):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.orientation = 'vertical'
+        self.spacing = 10
+        self.padding = 15
+        self._processing = False
+
+        self.add_widget(Label(text="[b]MedBot AI Assistant[/b]", markup=True, font_size='18sp',
+                               color=get_color_from_hex('#1E3A8A'), size_hint_y=None, height=40))
+
+        self.scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
+        self.chat_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=10, padding=[5, 5])
+        self.chat_box.bind(minimum_height=self.chat_box.setter('height'))
+        self.scroll.add_widget(self.chat_box)
+        self.add_widget(self.scroll)
+
+        quick_grid = GridLayout(cols=3, size_hint_y=None, height=100, spacing=6)
+        symptoms_list = ["Fever", "Headache", "Cough", "Cold", "Acidity", "Diarrhea"]
+        for s in symptoms_list:
+            btn = Button(text=s, font_size='13sp', bold=True, background_normal='',
+                         background_color=get_color_from_hex('#E3F2FD'), color=get_color_from_hex('#1E3A8A'))
+            btn.bind(on_release=lambda b, sym=s: self._process_query(sym))
+            quick_grid.add_widget(btn)
+        self.add_widget(quick_grid)
+
+        input_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=50, spacing=6)
+        self.text_input = TextInput(hint_text="Type symptoms here...", multiline=False,
+                                     font_size='14sp', padding=[12, 14, 12, 12])
+        self.text_input.bind(on_text_validate=self._on_text_submit)
+        btn_send = Button(text="Send", size_hint_x=None, width=75, bold=True,
+                           background_normal='', background_color=get_color_from_hex('#1E3A8A'))
+        btn_send.bind(on_release=self._on_text_submit)
+        input_row.add_widget(self.text_input)
+        input_row.add_widget(btn_send)
+        self.add_widget(input_row)
+
+        Clock.schedule_once(lambda dt: self._bot_say(
+            "Hello! Main aapka healthcare assistant hoon. Mujhe apne symptoms bataiye "
+            "(jaise Fever, Headache, ya Cough) taaki main medicine suggest kar sakoon."
+        ), 0.2)
+
+    def _on_text_submit(self, *args):
+        query = self.text_input.text.strip()
+        if query:
+            self.text_input.text = ""
+            self._process_query(query)
+
+    def _process_query(self, query):
+        if self._processing:
+            return
+        self._processing = True
+        self.chat_box.add_widget(ChatBubble(text=query, is_bot=False))
+
+        text = query.lower().strip()
+        for alias, canonical in ALIASES.items():
+            if alias in text:
+                text = text.replace(alias, canonical)
+
+        found = False
+        response = "[b][color=#10B981]Suggested Medications:[/color][/b]\n"
+        for symptom, meds in MEDICINE_DB.items():
+            if symptom in text:
+                found = True
+                for med in meds:
+                    response += f"\n- [b]{med}[/b]"
+
+        if found:
+            self.chat_box.add_widget(ChatBubble(text=response, is_bot=True))
+        else:
+            self.chat_box.add_widget(ChatBubble(
+                text=f"Symptom '[b]{query}[/b]' ke liye database mein koi records nahi mile. "
+                     f"Kripya dusra symptom check karein.", is_bot=True))
+
+        Clock.schedule_once(lambda dt: setattr(self.scroll, 'scroll_y', 0), 0.1)
+        self._processing = False
+
+    def _bot_say(self, text):
+        self.chat_box.add_widget(ChatBubble(text=text, is_bot=True))
 
 
 class MedBotScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
+    def __init__(self, **kw):
+        super().__init__(**kw)
         root = BoxLayout(orientation="vertical")
-        # White background sirf MedBot screen ke liye (global nahi)
-        with root.canvas.before:
-            Color(*C_BG)
-            root._bg_rect = Rectangle(pos=root.pos, size=root.size)
-        root.bind(
-            pos=lambda *a: setattr(root._bg_rect, "pos", root.pos),
-            size=lambda *a: setattr(root._bg_rect, "size", root.size),
-        )
-
-        # Header
-        header = BoxLayout(size_hint_y=None, height=dp(58), padding=[dp(12), dp(8)], spacing=dp(8))
-        with header.canvas.before:
-            Color(*C_HEADER_BG)
-            header.bg = Rectangle(pos=header.pos, size=header.size)
-        header.bind(
-            pos=lambda *a: setattr(header.bg, "pos", header.pos),
-            size=lambda *a: setattr(header.bg, "size", header.size),
-        )
-        icon = Label(text="💊", font_size=dp(26), size_hint=(None, 1), width=dp(36))
-        title_col = BoxLayout(orientation="vertical")
-        title = Label(
-            text="[b]MedBot — Symptom Checker[/b]", markup=True,
-            color=(1, 1, 1, 1), font_size=dp(16),
-            halign="left", size_hint=(1, 0.55)
-        )
-        title.bind(size=title.setter("text_size"))
-        sub = Label(
-            text="Jindal Steel OHC  |  Patratu",
-            color=(0.85, 0.92, 1, 1), font_size=dp(12),
-            halign="left", size_hint=(1, 0.45)
-        )
-        sub.bind(size=sub.setter("text_size"))
-        title_col.add_widget(title); title_col.add_widget(sub)
-        header.add_widget(icon); header.add_widget(title_col)
-        root.add_widget(header)
-
-        # Chat area
-        self.scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
-        self.chat_box = BoxLayout(
-            orientation="vertical", size_hint_y=None,
-            spacing=dp(6), padding=[dp(8), dp(10)]
-        )
-        self.chat_box.bind(minimum_height=self.chat_box.setter("height"))
-        self.scroll.add_widget(self.chat_box)
-        root.add_widget(self.scroll)
-
-        # Quick buttons
-        lbl_row = BoxLayout(size_hint_y=None, height=dp(24), padding=[dp(10), 0])
-        with lbl_row.canvas.before:
-            Color(*C_QUICK_BAR)
-            lbl_row.bg = Rectangle(pos=lbl_row.pos, size=lbl_row.size)
-        lbl_row.bind(
-            pos=lambda *a: setattr(lbl_row.bg, "pos", lbl_row.pos),
-            size=lambda *a: setattr(lbl_row.bg, "size", lbl_row.size),
-        )
-        lbl = Label(
-            text="[b]Quick:[/b]", markup=True,
-            color=C_ACCENT, font_size=dp(12), halign="left"
-        )
-        lbl.bind(size=lbl.setter("text_size"))
-        lbl_row.add_widget(lbl)
-        root.add_widget(lbl_row)
-
-        q_scroll = ScrollView(size_hint=(1, None), height=dp(48), do_scroll_y=False)
-        btn_row = BoxLayout(orientation="horizontal", size_hint=(None, 1),
-                            spacing=dp(6), padding=[dp(8), dp(4)])
-        quick_list = [
-            "Fever", "Headache", "Cough", "Cold", "Acidity",
-            "Allergy", "BP High", "Nausea", "Asthma", "Pain",
-            "Diabetes", "Diarrhea", "Weakness", "Joint Pain",
-            "Back Pain", "Dizziness", "Migraine", "UTI",
-        ]
-        for sym in quick_list:
-            b = Button(
-                text=sym, size_hint=(None, 1), width=dp(90),
-                font_size=dp(12), bold=True,
-                background_normal="", background_color=C_QUICK_BG, color=C_QUICK_TEXT
-            )
-            b.bind(on_release=lambda inst, s=sym: self._quick_send(s))
-            btn_row.add_widget(b)
-        btn_row.width = (dp(90) + dp(6)) * len(quick_list)
-        q_scroll.add_widget(btn_row)
-
-        q_wrap = BoxLayout(size_hint_y=None, height=dp(48))
-        with q_wrap.canvas.before:
-            Color(*C_QUICK_BAR)
-            q_wrap.bg = Rectangle(pos=q_wrap.pos, size=q_wrap.size)
-        q_wrap.bind(
-            pos=lambda *a: setattr(q_wrap.bg, "pos", q_wrap.pos),
-            size=lambda *a: setattr(q_wrap.bg, "size", q_wrap.size),
-        )
-        q_wrap.add_widget(q_scroll)
-        root.add_widget(q_wrap)
-
-        # Input bar
-        bar = BoxLayout(size_hint_y=None, height=dp(60),
-                        padding=[dp(8), dp(6)], spacing=dp(6))
-        with bar.canvas.before:
-            Color(*C_QUICK_BAR)
-            bar.bg = Rectangle(pos=bar.pos, size=bar.size)
-        bar.bind(
-            pos=lambda *a: setattr(bar.bg, "pos", bar.pos),
-            size=lambda *a: setattr(bar.bg, "size", bar.size),
-        )
-        self.text_input = TextInput(
-            hint_text="Symptoms likhein... (e.g. fever, headache)",
-            multiline=False, size_hint=(1, None), height=dp(44),
-            font_size=dp(14), background_color=C_INPUT_BG,
-            foreground_color=C_INPUT_TEXT,
-            hint_text_color=get_color_from_hex("#9E9E9E"),
-            padding=[dp(10), dp(10)],
-        )
-        self.text_input.bind(on_text_validate=self._on_send)
-        send_btn = Button(
-            text="SEND ➤", size_hint=(None, None),
-            height=dp(44), width=dp(85),
-            font_size=dp(13), bold=True,
-            background_normal="", background_color=C_SEND_BTN,
-            color=(1, 1, 1, 1)
-        )
-        send_btn.bind(on_release=self._on_send)
-        bar.add_widget(self.text_input); bar.add_widget(send_btn)
-        root.add_widget(bar)
-
+        root.add_widget(build_nav_bar(self))
+        self.body = MedBotBody()
+        root.add_widget(self.body)
         self.add_widget(root)
 
-        Clock.schedule_once(lambda dt: self._bot_say(
-            "[b][color=#1565C0]🏥 Jindal OHC MedBot[/color][/b]\n\n"
-            "Namaste! Apne symptoms type karein ya\n"
-            "Quick buttons tap karein.\n\n"
-            "[color=#E65100][b]⚠️ Disclaimer:[/b][/color] Yeh sirf reference\n"
-            "hai. Doctor se zaroor milein."
-        ), 0.4)
 
-    def _quick_send(self, symptom):
-        self.text_input.text = symptom
-        self._on_send()
-
-    def _on_send(self, *args):
-        user_text = self.text_input.text.strip()
-        if not user_text:
-            return
-        self.text_input.text = ""
-        self._add_bubble(user_text, is_bot=False)
-        Clock.schedule_once(lambda dt: self._process_query(user_text), 0.2)
-
-    def _process_query(self, user_text):
-        low = user_text.lower()
-
-        if any(g in low for g in ["hello", "hi", "namaste", "hey"]):
-            self._bot_say("Namaste! 😊 Apne symptoms batayein.\nExample: [i]fever aur headache[/i]")
-            return
-        if "help" in low or "list" in low:
-            self._bot_say(
-                "[b][color=#1565C0]📋 Available Symptoms:[/color][/b]\n"
-                "Fever • Headache • Cough • Cold • Allergy\n"
-                "Acidity • BP High • Diabetes • Asthma\n"
-                "Nausea • Diarrhea • Body Ache • Joint Pain\n"
-                "Weakness • Skin Rash • UTI • Migraine ..."
-            )
-            return
-        if low in ["clear", "reset", "new"]:
-            self.chat_box.clear_widgets()
-            self._bot_say("✅ Chat clear!\nApne symptoms batayein.")
-            return
-
-        results = find_medicines(user_text)
-        if results:
-            resp = (f"[b][color=#2E7D32]✅ '{user_text}' — Suggestions:[/color][/b]\n"
-                    "━" * 24 + "\n")
-            for sym, meds in results.items():
-                resp += f"\n[b][color=#1565C0]🔹 {sym}[/color][/b]\n"
-                for i, med in enumerate(meds[:4], 1):
-                    resp += f"  {i}. {med}\n"
-            resp += "\n[color=#E65100][b]⚠️ Doctor ki salah zaroor lein.[/b][/color]"
-            self._bot_say(resp)
-        else:
-            self._bot_say(
-                f"[color=#E65100]❌ '{user_text}' match nahi hua.[/color]\n\n"
-                "Try karein: fever • headache • cough\n"
-                "acidity • bp high • allergy • nausea\n\n"
-                "[b]'help'[/b] type karein full list ke liye."
-            )
-
-    def _bot_say(self, text):
-        self._add_bubble(text, is_bot=True)
-
-    def _add_bubble(self, text, is_bot=True):
-        bubble = ChatBubble(text=text, is_bot=is_bot)
-        self.chat_box.add_widget(bubble)
-        Clock.schedule_once(lambda dt: setattr(self.scroll, "scroll_y", 0), 0.2)
-
-
-# ═══════════════════════════════════════════════════════════
-#  MAIN APP — Navigation + ScreenManager
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+#  APP ENTRY
+# ══════════════════════════════════════════════════════════════════════════
 class JindalOHCApp(App):
     def build(self):
-        self.title = "Jindal OHC Management System"
-        root = BoxLayout(orientation='vertical')
+        self.title = "Jindal OHC — Unified App"
+        sm = ScreenManager()
+        sm.add_widget(OPDScreen(name="opd"))
+        sm.add_widget(MedicineScreen(name="medicine"))
+        sm.add_widget(MedBotScreen(name="medbot"))
+        sm.current = "opd"
+        self.sm = sm
+        return sm
 
-        # ── Top Navigation Bar ─────────────────────────────
-        nav = BoxLayout(orientation='horizontal', size_hint_y=None, height=dp(50),
-                        spacing=3, padding=[3, 4])
-        with nav.canvas.before:
-            Color(0.08, 0.39, 0.75, 1)          # dark blue bar
-            nav.bg = Rectangle(pos=nav.pos, size=nav.size)
-        nav.bind(
-            pos=lambda *a: setattr(nav.bg, "pos", nav.pos),
-            size=lambda *a: setattr(nav.bg, "size", nav.size),
-        )
-
-        self.nav_buttons = {}
-        nav_items = [
-            ("opd",      "🏥 OPD"),
-            ("medicine", "💊 Medicine"),
-            ("medbot",   "🤖 MedBot"),
-        ]
-        for screen_name, label in nav_items:
-            btn = Button(
-                text=label,
-                font_size=dp(13), bold=True,
-                background_normal="",
-                background_color=(0.15, 0.50, 0.90, 1),
-                color=(1, 1, 1, 1),
-            )
-            btn.bind(on_press=lambda inst, sn=screen_name: self._switch(sn))
-            nav.add_widget(btn)
-            self.nav_buttons[screen_name] = btn
-
-        root.add_widget(nav)
-
-        # ── Screen Manager ─────────────────────────────────
-        self.sm = ScreenManager()
-        self.sm.add_widget(OPDScreen(name="opd"))
-        self.sm.add_widget(MedicineScreen(name="medicine"))
-        self.sm.add_widget(MedBotScreen(name="medbot")) 
-        root.add_widget(self.sm)
-
-        self._switch("opd")   # default screen
-        return root
-
-    def _switch(self, screen_name):
-        self.sm.current = screen_name
-        # Highlight active tab
-        for name, btn in self.nav_buttons.items():
-            btn.background_color = (0.05, 0.28, 0.60, 1) if name == screen_name else (0.15, 0.50, 0.90, 1)
+    def on_start(self):
+        # Medicine screen ke urgent alerts ka popup dikhayein
+        self.sm.get_screen("medicine").body.on_start_check()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     JindalOHCApp().run()
